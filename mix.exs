@@ -23,8 +23,9 @@ defmodule MyMicropub.MixProject do
       {:plug, "~> 1.5"},
       {:plug_micropub, github: "bismark/plug_micropub"},
       {:cowboy, "~> 2.3"},
-      {:jason, github: "appcues/jason", branch: "formatter"},
-      {:httpoison, "~> 1.2"}
+      {:jason, "~> 1.1"},
+      {:httpoison, "~> 1.2"},
+      {:exsync, "~> 0.2.3", only: :dev}
     ]
   end
 end

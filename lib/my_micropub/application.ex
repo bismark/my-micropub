@@ -4,6 +4,11 @@ defmodule MyMicropub.Application do
   use Application
 
   def start(_type, _args) do
+    case Code.ensure_loaded(ExSync) do
+      {:module, ExSync = mod} -> mod.start()
+      {:error, :nofile} -> :ok
+    end
+
     children = [
       Plug.Adapters.Cowboy2.child_spec(
         scheme: :http,
