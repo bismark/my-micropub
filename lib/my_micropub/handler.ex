@@ -3,6 +3,8 @@ defmodule MyMicropub.Handler do
 
   @widths [360, 720, 1200]
 
+  @json_opts [pretty: [indent: "    "]]
+
   @supported_properties %{
     "name" => "title",
     "category" => "tags",
@@ -10,6 +12,8 @@ defmodule MyMicropub.Handler do
     "content" => "content",
     "uid" => "slug"
   }
+
+  @list_properties ["tags", "archive"]
 
   @impl true
   def handle_create("entry", properties, access_token) do
@@ -38,7 +42,7 @@ defmodule MyMicropub.Handler do
         |> handle_title(properties)
         |> handle_bookmark(properties)
         |> handle_tags(properties)
-        |> Jason.encode!(pretty: true)
+        |> Jason.encode!(@json_opts)
 
       File.write!(file_path, [metadata, "\n\n", content])
 
@@ -52,7 +56,95 @@ defmodule MyMicropub.Handler do
   @impl true
   def handle_update(url, replace, add, delete, access_token) do
     with :ok <- check_auth(access_token) do
+      # IO.inspect replace
+      # IO.inspect add
+      # IO.inspect delete
       slug = parse_url(url)
+      file_path = file_path(slug)
+      post = read_post(file_path)
+
+      post =
+        replace
+        |> Enum.filter(&Map.has_key?(@supported_properties, elem(&1, 0)))
+        |> Enum.reduce(post, fn {k, v}, post ->
+          tag = Map.fetch!(@supported_properties, k)
+          Map.put(post, tag, v)
+        end)
+
+      post =
+        add
+        |> Enum.filter(&Map.has_key?(@supported_properties, elem(&1, 0)))
+        |> Enum.reduce(post, fn {k, v}, post ->
+          tag = Map.fetch!(@supported_properties, k)
+          Map.update(post, tag, v, &(&1 ++ v))
+        end)
+
+      post =
+        delete
+        |> Enum.filter(fn
+          {k, _} -> Map.has_key?(@supported_properties, k)
+          k -> Map.has_key?(@supported_properties, k)
+        end)
+        |> Enum.reduce(post, fn
+          {k, v}, post ->
+            tag = Map.fetch!(@supported_properties, k)
+            Map.update(post, tag, [], &(&1 -- v))
+
+          k, post ->
+            tag = Map.fetch!(@supported_properties, k)
+            Map.delete(post, tag)
+        end)
+
+      post =
+        Map.new(post, fn
+          {k, v} when k in @list_properties ->
+            {k, v}
+
+          {k, [v]} ->
+            v =
+              v
+              |> String.split(~r/\R/)
+              |> Enum.join("\n")
+
+            {k, v}
+        end)
+
+      # IO.inspect post
+
+      {content, metadata} = Map.pop(post, "content")
+
+      date =
+        metadata
+        |> Map.fetch!("date")
+        |> NaiveDateTime.from_iso8601!()
+        |> DateTime.from_naive!("Etc/UTC")
+
+      new_slug = date |> DateTime.to_unix()
+
+      if new_slug == slug do
+        metadata = Jason.encode!(metadata, @json_opts)
+        File.write!(file_path, [metadata, "\n\n", content])
+        :ok
+      else
+        year = Integer.to_string(date.year)
+        month = date.month |> Integer.to_string() |> String.pad_leading(2, "0")
+        file_dir = Path.join([posts_path(), year, month])
+        File.mkdir_p!(file_dir)
+        new_file_path = Path.join([file_dir, "#{new_slug}.md"])
+
+        metadata =
+          metadata
+          |> Map.put("slug", Integer.to_string(new_slug))
+          |> Map.put("archive", ["#{year}-#{month}"])
+          |> Jason.encode!(@json_opts)
+
+        # IO.inspect(new_file_path)
+        # IO.inspect(file_path)
+        File.write!(new_file_path, [metadata, "\n\n", content])
+        File.rm!(file_path)
+        url = hostname() <> "/post/" <> Integer.to_string(new_slug)
+        {:ok, url}
+      end
     end
   end
 
@@ -79,16 +171,11 @@ defmodule MyMicropub.Handler do
     end
   end
 
-  def handle_config_query(_), do: {:error, :insufficient_scope}
-
   @impl true
   def handle_source_query(url, properties, access_token) do
     with :ok <- check_auth(access_token) do
       slug = parse_url(url)
-      date = DateTime.from_unix!(slug)
-      year = Integer.to_string(date.year)
-      month = date.month |> Integer.to_string() |> String.pad_leading(2, "0")
-      file_path = Path.join([posts_path(), year, month, "#{slug}.md"])
+      file_path = file_path(slug)
       post = read_post(file_path)
 
       res =
@@ -98,8 +185,7 @@ defmodule MyMicropub.Handler do
             Enum.reduce(@supported_properties, %{}, fn {ex_prop, in_prop}, acc ->
               case Map.fetch(post, in_prop) do
                 :error -> acc
-                {:ok, list} when is_list(list) -> Map.put(acc, ex_prop, list)
-                {:ok, other} -> Map.put(acc, ex_prop, [other])
+                {:ok, value} -> Map.put(acc, ex_prop, value)
               end
             end)
 
@@ -114,8 +200,7 @@ defmodule MyMicropub.Handler do
                 {:ok, tag} ->
                   case Map.fetch(post, tag) do
                     :error -> Map.put(acc, property, [])
-                    {:ok, list} when is_list(list) -> Map.put(acc, property, list)
-                    {:ok, other} -> Map.put(acc, property, [other])
+                    {:ok, value} -> Map.put(acc, property, value)
                   end
               end
             end)
@@ -124,8 +209,6 @@ defmodule MyMicropub.Handler do
       {:ok, %{"properties" => res}}
     end
   end
-
-  def handle_source_query(_, _, _), do: {:error, :insufficient_scope}
 
   @impl true
   def handle_media(file, access_token) do
@@ -197,7 +280,7 @@ defmodule MyMicropub.Handler do
       |> Map.put(:type, "photo")
 
     case Enum.reverse(sizes) do
-      @width -> metadata
+      @widths -> metadata
       sizes -> Map.put(metadata, :imagesizes, sizes)
     end
   end
@@ -315,7 +398,19 @@ defmodule MyMicropub.Handler do
           {metadata, acc <> line}
       end)
 
-    Map.put(metadata, "content", content)
+    metadata
+    |> Map.new(fn
+      {k, list} when is_list(list) -> {k, list}
+      {k, other} -> {k, [other]}
+    end)
+    |> Map.put("content", [content])
+  end
+
+  defp file_path(slug) do
+    date = DateTime.from_unix!(slug)
+    year = Integer.to_string(date.year)
+    month = date.month |> Integer.to_string() |> String.pad_leading(2, "0")
+    Path.join([posts_path(), year, month, "#{slug}.md"])
   end
 
   defp posts_path, do: Application.get_env(:my_micropub, :posts_path)
