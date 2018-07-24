@@ -14,7 +14,7 @@ defmodule MyMicropub.Handler do
   @impl true
   def handle_create("entry", properties, access_token) do
     with :ok <- check_auth(access_token) do
-      #IO.inspect(properties)
+      # IO.inspect(properties)
       now = DateTime.utc_now()
 
       year = Integer.to_string(now.year)
@@ -53,7 +53,6 @@ defmodule MyMicropub.Handler do
   def handle_update(url, replace, add, delete, access_token) do
     with :ok <- check_auth(access_token) do
       slug = parse_url(url)
-
     end
   end
 
@@ -84,14 +83,14 @@ defmodule MyMicropub.Handler do
 
   @impl true
   def handle_source_query(url, properties, access_token) do
-    with :ok <- check_auth(access_token)
-    do
+    with :ok <- check_auth(access_token) do
       slug = parse_url(url)
       date = DateTime.from_unix!(slug)
       year = Integer.to_string(date.year)
       month = date.month |> Integer.to_string() |> String.pad_leading(2, "0")
       file_path = Path.join([posts_path(), year, month, "#{slug}.md"])
       post = read_post(file_path)
+
       res =
         case properties do
           [] ->
@@ -103,12 +102,15 @@ defmodule MyMicropub.Handler do
                 {:ok, other} -> Map.put(acc, ex_prop, [other])
               end
             end)
+
           list ->
             # Return everything they asked for, defaulting to empty list if we
             # don't know about it or don't have it
             Enum.reduce(list, %{}, fn property, acc ->
               case Map.fetch(@supported_properties, property) do
-                :error -> Map.put(acc, property, [])
+                :error ->
+                  Map.put(acc, property, [])
+
                 {:ok, tag} ->
                   case Map.fetch(post, tag) do
                     :error -> Map.put(acc, property, [])
@@ -142,8 +144,8 @@ defmodule MyMicropub.Handler do
     |> Map.put(:type, "link")
     |> Map.put(:link, url)
   end
-  defp handle_bookmark(metadata, _), do: metadata
 
+  defp handle_bookmark(metadata, _), do: metadata
 
   defp handle_photo(metadata, %{"photo" => [%Plug.Upload{} = upload]}) do
     {res, 0} =
@@ -174,19 +176,20 @@ defmodule MyMicropub.Handler do
       System.cmd("exiftool", ["-Orientation=1", "-n", upload.path])
     end
 
-    sizes = if extension in ["JPG", "PNG"] do
-      Enum.reduce_while(@widths, [], fn
-        target_width, acc when image_width > target_width ->
-          create_thumbnail(upload.path, metadata.slug, extension, target_width)
-          {:cont, [target_width | acc]}
+    sizes =
+      if extension in ["JPG", "PNG"] do
+        Enum.reduce_while(@widths, [], fn
+          target_width, acc when image_width > target_width ->
+            create_thumbnail(upload.path, metadata.slug, extension, target_width)
+            {:cont, [target_width | acc]}
 
-        _, acc ->
-          create_thumbnail(upload.path, metadata.slug, extension, image_width)
-          {:halt, [image_width | acc]}
-      end)
-    else
-      [image_width]
-    end
+          _, acc ->
+            create_thumbnail(upload.path, metadata.slug, extension, image_width)
+            {:halt, [image_width | acc]}
+        end)
+      else
+        [image_width]
+      end
 
     metadata =
       metadata
@@ -287,6 +290,7 @@ defmodule MyMicropub.Handler do
 
   defp parse_url(url) do
     uri = URI.parse(url)
+
     uri.path
     |> Path.basename()
     |> String.to_integer()
@@ -303,18 +307,19 @@ defmodule MyMicropub.Handler do
           else
             res
           end
+
         line, {true, acc} ->
           {true, acc <> line}
+
         line, {metadata, acc} ->
           {metadata, acc <> line}
       end)
+
     Map.put(metadata, "content", content)
   end
-
 
   defp posts_path, do: Application.get_env(:my_micropub, :posts_path)
   defp original_image_path, do: Application.get_env(:my_micropub, :original_image_path)
   defp media_path, do: Application.get_env(:my_micropub, :media_path)
   defp hostname, do: Application.get_env(:my_micropub, :hostname)
-
 end
