@@ -17,7 +17,7 @@ defmodule MyMicropub.Handler do
 
   @impl true
   def handle_create("entry", properties, access_token) do
-    with :ok <- check_auth(access_token) do
+    with :ok <- check_auth(access_token, "create") do
       # IO.inspect(properties)
       now = DateTime.utc_now()
 
@@ -55,7 +55,7 @@ defmodule MyMicropub.Handler do
 
   @impl true
   def handle_update(url, replace, add, delete, access_token) do
-    with :ok <- check_auth(access_token) do
+    with :ok <- check_auth(access_token, "update") do
       # IO.inspect replace
       # IO.inspect add
       # IO.inspect delete
@@ -95,23 +95,7 @@ defmodule MyMicropub.Handler do
             Map.delete(post, tag)
         end)
 
-      post =
-        Map.new(post, fn
-          {k, v} when k in @list_properties ->
-            {k, v}
-
-          {k, [v]} ->
-            v =
-              v
-              |> String.split(~r/\R/)
-              |> Enum.join("\n")
-
-            {k, v}
-        end)
-
-      # IO.inspect post
-
-      {content, metadata} = Map.pop(post, "content")
+      {content, metadata} = format_post(post)
 
       date =
         metadata
@@ -148,25 +132,39 @@ defmodule MyMicropub.Handler do
     end
   end
 
-  def handle_update(_, _, _), do: {:error, :insufficient_scope}
-
   @impl true
   def handle_delete(url, access_token) do
-    :ok
-  end
+    with :ok <- check_auth(access_token, "delete") do
+      slug = parse_url(url)
+      file_path = file_path(slug)
+      post = read_post(file_path)
+      post = Map.put(post, "draft", [true])
+      {content, metadata} = format_post(post)
 
-  def handle_delete(_, _), do: {:error, :insufficient_scope}
+      metadata = Jason.encode!(metadata, @json_opts)
+      File.write!(file_path, [metadata, "\n\n", content])
+      :ok
+    end
+  end
 
   @impl true
   def handle_undelete(url, access_token) do
-    :ok
+    with :ok <- check_auth(access_token, "undelete") do
+      slug = parse_url(url)
+      file_path = file_path(slug)
+      post = read_post(file_path)
+      post = Map.delete(post, "draft")
+      {content, metadata} = format_post(post)
+      metadata = Jason.encode!(metadata, @json_opts)
+      File.write!(file_path, [metadata, "\n\n", content])
+      url = hostname() <> "/post/" <> Integer.to_string(slug)
+      {:ok, url}
+    end
   end
-
-  def handle_undelete(_, _), do: {:error, :insufficient_scope}
 
   @impl true
   def handle_config_query(access_token) do
-    with :ok <- check_auth(access_token) do
+    with :ok <- check_auth(access_token, "undelete") do
       {:ok, %{}}
     end
   end
@@ -361,14 +359,27 @@ defmodule MyMicropub.Handler do
   defp parse_content([%{"html" => html}]), do: html
   defp parse_content(content), do: content
 
-  defp check_auth(access_token) do
+  defp check_auth(access_token, required_scope \\ nil) do
     url = "https://tokens.indieauth.com/token"
-    headers = [authorization: "Bearer #{access_token}", accept: "application/json; charset=utf-8"]
+    headers = [authorization: "Bearer #{access_token}", accept: "application/json"]
 
-    case HTTPoison.get(url) do
-      {:ok, %HTTPoison.Response{status_code: 200}} -> :ok
-      _ -> {:error, :insufficient_scope}
+    hostname = hostname()
+
+    with {:ok, %HTTPoison.Response{status_code: 200} = res} <- HTTPoison.get(url, headers),
+         {:ok, body} = Jason.decode(res.body),
+         %{"me" => ^hostname, "scope" => scope} <- body do
+      check_scope(scope, required_scope)
+    else
+      _ ->
+        {:error, :insufficient_scope}
     end
+  end
+
+  defp check_scope(_, nil), do: :ok
+
+  defp check_scope(scope, required) do
+    scope = String.split(scope)
+    if required in scope, do: :ok, else: :error
   end
 
   defp parse_url(url) do
@@ -379,7 +390,7 @@ defmodule MyMicropub.Handler do
     |> String.to_integer()
   end
 
-  def read_post(path) do
+  defp read_post(path) do
     {metadata, content} =
       path
       |> File.stream!()
@@ -404,6 +415,27 @@ defmodule MyMicropub.Handler do
       {k, other} -> {k, [other]}
     end)
     |> Map.put("content", [content])
+  end
+
+  defp format_post(post) do
+    post =
+      Map.new(post, fn
+        {k, v} when k in @list_properties ->
+          {k, v}
+
+        {k, [v]} when is_binary(v) ->
+          v =
+            v
+            |> String.split(~r/\R/)
+            |> Enum.join("\n")
+
+          {k, v}
+
+        {k, [v]} ->
+          {k, v}
+      end)
+
+    Map.pop(post, "content")
   end
 
   defp file_path(slug) do
