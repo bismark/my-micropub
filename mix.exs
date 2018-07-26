@@ -25,7 +25,8 @@ defmodule MyMicropub.MixProject do
       {:cowboy, "~> 2.3"},
       {:jason, "~> 1.1"},
       {:httpoison, "~> 1.2"},
-      {:exsync, "~> 0.2.3", only: :dev}
+      {:exsync, "~> 0.2.3", only: :dev},
+      {:elixir_uuid, "~> 1.2"}
     ]
   end
 end

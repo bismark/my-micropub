@@ -13,13 +13,23 @@ defmodule MyMicropub.Handler do
     "uid" => "slug"
   }
 
-  @list_properties ["tags", "archive"]
+  @list_properties ["tags", "archive", "alturls"]
 
   @impl true
   def handle_create("entry", properties, access_token) do
     with :ok <- check_auth(access_token, "create") do
       # IO.inspect(properties)
-      now = DateTime.utc_now()
+      now =
+        case properties["published"] do
+          nil ->
+            DateTime.utc_now() |> DateTime.truncate(:second)
+
+          [date] ->
+            date
+            |> NaiveDateTime.from_iso8601!()
+            |> DateTime.from_naive!("Etc/UTC")
+            |> DateTime.truncate(:second)
+        end
 
       year = Integer.to_string(now.year)
       month = now.month |> Integer.to_string() |> String.pad_leading(2, "0")
@@ -46,7 +56,11 @@ defmodule MyMicropub.Handler do
 
       File.write!(file_path, [metadata, "\n\n", content])
 
-      url = hostname() <> "/post/" <> slug
+      url =
+        hostname()
+        |> struct(path: Path.join(["/post", slug]))
+        |> URI.to_string()
+
       {:ok, :created, url}
     end
   end
@@ -102,6 +116,7 @@ defmodule MyMicropub.Handler do
         |> Map.fetch!("date")
         |> NaiveDateTime.from_iso8601!()
         |> DateTime.from_naive!("Etc/UTC")
+        |> DateTime.truncate(:second)
 
       new_slug = date |> DateTime.to_unix()
 
@@ -126,7 +141,12 @@ defmodule MyMicropub.Handler do
         # IO.inspect(file_path)
         File.write!(new_file_path, [metadata, "\n\n", content])
         File.rm!(file_path)
-        url = hostname() <> "/post/" <> Integer.to_string(new_slug)
+
+        url =
+          hostname()
+          |> struct(path: Path.join(["/post", Integer.to_string(new_slug)]))
+          |> URI.to_string()
+
         {:ok, url}
       end
     end
@@ -157,15 +177,25 @@ defmodule MyMicropub.Handler do
       {content, metadata} = format_post(post)
       metadata = Jason.encode!(metadata, @json_opts)
       File.write!(file_path, [metadata, "\n\n", content])
-      url = hostname() <> "/post/" <> Integer.to_string(slug)
+
+      url =
+        hostname()
+        |> struct(path: Path.join(["/post", Integer.to_string(slug)]))
+        |> URI.to_string()
+
       {:ok, url}
     end
   end
 
   @impl true
   def handle_config_query(access_token) do
-    with :ok <- check_auth(access_token, "undelete") do
-      {:ok, %{}}
+    with :ok <- check_auth(access_token) do
+      endpoint = URI.to_string(%URI{micropub_url() | path: "/media"})
+
+      {:ok,
+       %{
+         "media-endpoint" => endpoint
+       }}
     end
   end
 
@@ -210,7 +240,13 @@ defmodule MyMicropub.Handler do
 
   @impl true
   def handle_media(file, access_token) do
-    :ok
+    with :ok <- check_auth(access_token) do
+      guid = UUID.uuid4()
+      File.mkdir_p(media_upload_path())
+      File.cp!(file.path, Path.join([media_upload_path(), guid]))
+      url = URI.to_string(%URI{micropub_url() | path: "/nonexistent/#{guid}"})
+      {:ok, url}
+    end
   end
 
   defp handle_tags(metadata, %{"category" => tags}), do: Map.put(metadata, :tags, tags)
@@ -229,6 +265,22 @@ defmodule MyMicropub.Handler do
   defp handle_bookmark(metadata, _), do: metadata
 
   defp handle_photo(metadata, %{"photo" => [%Plug.Upload{} = upload]}) do
+    _handle_photo(metadata, upload.path)
+  end
+
+  defp handle_photo(metadata, %{"photo" => [url]}) do
+    uri = URI.parse(url)
+
+    if micropub_url().host == uri.host do
+      guid = Path.basename(uri.path)
+      path = Path.join([media_upload_path(), guid])
+      _handle_photo(metadata, path)
+    else
+      metadata
+    end
+  end
+
+  defp _handle_photo(metadata, path) do
     {res, 0} =
       System.cmd("exiftool", [
         "-FileTypeExtension",
@@ -236,7 +288,7 @@ defmodule MyMicropub.Handler do
         "-ImageWidth",
         "-n",
         "-json",
-        upload.path
+        path
       ])
 
     image_metadata =
@@ -251,21 +303,21 @@ defmodule MyMicropub.Handler do
     dest_path = Path.join([original_image_path(), metadata.slug])
     File.mkdir_p!(dest_path)
     dest_path = Path.join([dest_path, "1.#{extension}"])
-    File.copy!(upload.path, dest_path)
+    File.copy!(path, dest_path)
 
     if orientation != 1 do
-      System.cmd("exiftool", ["-Orientation=1", "-n", upload.path])
+      System.cmd("exiftool", ["-Orientation=1", "-n", path])
     end
 
     sizes =
       if extension in ["JPG", "PNG"] do
         Enum.reduce_while(@widths, [], fn
           target_width, acc when image_width > target_width ->
-            create_thumbnail(upload.path, metadata.slug, extension, target_width)
+            create_thumbnail(path, metadata.slug, extension, target_width)
             {:cont, [target_width | acc]}
 
           _, acc ->
-            create_thumbnail(upload.path, metadata.slug, extension, image_width)
+            create_thumbnail(path, metadata.slug, extension, image_width)
             {:halt, [image_width | acc]}
         end)
       else
@@ -282,8 +334,6 @@ defmodule MyMicropub.Handler do
       sizes -> Map.put(metadata, :imagesizes, sizes)
     end
   end
-
-  defp handle_photo(metadata, _), do: metadata
 
   defp create_thumbnail(path, slug, extension, target_width) do
     dest_path = Path.join([media_path(), slug])
@@ -363,14 +413,14 @@ defmodule MyMicropub.Handler do
     url = "https://tokens.indieauth.com/token"
     headers = [authorization: "Bearer #{access_token}", accept: "application/json"]
 
-    hostname = hostname()
+    hostname = URI.to_string(%URI{hostname() | path: "/"})
 
     with {:ok, %HTTPoison.Response{status_code: 200} = res} <- HTTPoison.get(url, headers),
          {:ok, body} = Jason.decode(res.body),
          %{"me" => ^hostname, "scope" => scope} <- body do
       check_scope(scope, required_scope)
     else
-      _ ->
+      _res ->
         {:error, :insufficient_scope}
     end
   end
@@ -379,7 +429,7 @@ defmodule MyMicropub.Handler do
 
   defp check_scope(scope, required) do
     scope = String.split(scope)
-    if required in scope, do: :ok, else: :error
+    if required in scope, do: :ok, else: {:error, :insufficient_scope}
   end
 
   defp parse_url(url) do
@@ -449,4 +499,6 @@ defmodule MyMicropub.Handler do
   defp original_image_path, do: Application.get_env(:my_micropub, :original_image_path)
   defp media_path, do: Application.get_env(:my_micropub, :media_path)
   defp hostname, do: Application.get_env(:my_micropub, :hostname)
+  defp micropub_url, do: Application.get_env(:my_micropub, :micropub_url)
+  defp media_upload_path, do: Application.get_env(:my_micropub, :media_upload_path)
 end
