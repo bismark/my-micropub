@@ -1,6 +1,8 @@
 defmodule MyMicropub.Handler do
   @behaviour PlugMicropub.HandlerBehaviour
 
+  @publish false
+
   @widths [360, 720, 1200]
 
   @json_opts [pretty: [indent: "    "]]
@@ -60,6 +62,8 @@ defmodule MyMicropub.Handler do
         hostname()
         |> struct(path: Path.join(["/post", slug]))
         |> URI.to_string()
+
+      if @publish, do: publish()
 
       {:ok, :created, url}
     end
@@ -123,6 +127,7 @@ defmodule MyMicropub.Handler do
       if new_slug == slug do
         metadata = Jason.encode!(metadata, @json_opts)
         File.write!(file_path, [metadata, "\n\n", content])
+        if @publish, do: publish()
         :ok
       else
         year = Integer.to_string(date.year)
@@ -147,6 +152,7 @@ defmodule MyMicropub.Handler do
           |> struct(path: Path.join(["/post", Integer.to_string(new_slug)]))
           |> URI.to_string()
 
+        if @publish, do: publish()
         {:ok, url}
       end
     end
@@ -163,6 +169,7 @@ defmodule MyMicropub.Handler do
 
       metadata = Jason.encode!(metadata, @json_opts)
       File.write!(file_path, [metadata, "\n\n", content])
+      if @publish, do: publish()
       :ok
     end
   end
@@ -183,6 +190,7 @@ defmodule MyMicropub.Handler do
         |> struct(path: Path.join(["/post", Integer.to_string(slug)]))
         |> URI.to_string()
 
+      if @publish, do: publish()
       {:ok, url}
     end
   end
@@ -190,7 +198,7 @@ defmodule MyMicropub.Handler do
   @impl true
   def handle_config_query(access_token) do
     with :ok <- check_auth(access_token) do
-      endpoint = URI.to_string(%URI{micropub_url() | path: "/media"})
+      endpoint = URI.to_string(%URI{micropub_url() | path: "/micropub/media"})
 
       {:ok,
        %{
@@ -244,9 +252,15 @@ defmodule MyMicropub.Handler do
       guid = UUID.uuid4()
       File.mkdir_p(media_upload_path())
       File.cp!(file.path, Path.join([media_upload_path(), guid]))
-      url = URI.to_string(%URI{micropub_url() | path: "/nonexistent/#{guid}"})
+      url = URI.to_string(%URI{micropub_url() | path: "/media/#{guid}"})
       {:ok, url}
     end
+  end
+
+  def get_media(guid) do
+    path = Path.join([media_upload_path(), guid])
+    {content_type, 0} = System.cmd("file", ["-b", "--mime-type", path])
+    {path, String.trim(content_type)}
   end
 
   defp handle_tags(metadata, %{"category" => tags}), do: Map.put(metadata, :tags, tags)
@@ -278,6 +292,10 @@ defmodule MyMicropub.Handler do
     else
       metadata
     end
+  end
+
+  defp handle_photo(metadata, _) do
+    metadata
   end
 
   defp _handle_photo(metadata, path) do
@@ -495,10 +513,17 @@ defmodule MyMicropub.Handler do
     Path.join([posts_path(), year, month, "#{slug}.md"])
   end
 
-  defp posts_path, do: Application.get_env(:my_micropub, :posts_path)
-  defp original_image_path, do: Application.get_env(:my_micropub, :original_image_path)
-  defp media_path, do: Application.get_env(:my_micropub, :media_path)
+  defp publish do
+    System.cmd("git", ["commit", "-a", "-m", "\"micropub post\""], cd: blog_path())
+    #System.cmd("git", ["commit", "-a", "-m", "\"micropub post\""], cd: blog_path())
+  end
+
+  defp blog_path, do: Application.get_env(:my_micropub, :blog_path)
+  defp posts_path, do: Path.join([Application.get_env(:my_micropub, :blog_path), "/content/post"])
+  defp original_image_path, do: Path.join([Application.get_env(:my_micropub, :blog_path), "/original_images"])
+  defp media_path, do: Path.join([Application.get_env(:my_micropub, :blog_path), "/static/post"])
   defp hostname, do: Application.get_env(:my_micropub, :hostname)
   defp micropub_url, do: Application.get_env(:my_micropub, :micropub_url)
   defp media_upload_path, do: Application.get_env(:my_micropub, :media_upload_path)
+
 end
