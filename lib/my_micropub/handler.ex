@@ -37,10 +37,10 @@ defmodule MyMicropub.Handler do
       month = now.month |> Integer.to_string() |> String.pad_leading(2, "0")
       slug = now |> DateTime.to_unix() |> Integer.to_string()
 
-      file_dir = Path.join([posts_path(), year, month])
+      file_dir = Path.join([posts_path(), year, month, slug])
       File.mkdir_p!(file_dir)
 
-      file_path = Path.join([file_dir, "#{slug}.md"])
+      file_path = Path.join([file_dir, "index.md"])
 
       content = parse_content(properties["content"])
 
@@ -78,7 +78,7 @@ defmodule MyMicropub.Handler do
       # IO.inspect add
       # IO.inspect delete
       slug = parse_url(url)
-      file_path = file_path(slug)
+      file_path = post_path(slug)
       post = read_post(file_path)
 
       post =
@@ -130,15 +130,16 @@ defmodule MyMicropub.Handler do
         if @publish, do: publish()
         :ok
       else
+        new_slug = Integer.to_string(new_slug)
         year = Integer.to_string(date.year)
         month = date.month |> Integer.to_string() |> String.pad_leading(2, "0")
-        file_dir = Path.join([posts_path(), year, month])
+        file_dir = Path.join([posts_path(), year, month, new_slug])
         File.mkdir_p!(file_dir)
-        new_file_path = Path.join([file_dir, "#{new_slug}.md"])
+        new_file_path = Path.join([file_dir, "index.md"])
 
         metadata =
           metadata
-          |> Map.put("slug", Integer.to_string(new_slug))
+          |> Map.put("slug", new_slug)
           |> Map.put("archive", ["#{year}-#{month}"])
           |> Jason.encode!(@json_opts)
 
@@ -149,7 +150,7 @@ defmodule MyMicropub.Handler do
 
         url =
           hostname()
-          |> struct(path: Path.join(["/post", Integer.to_string(new_slug)]))
+          |> struct(path: Path.join(["/post", new_slug]))
           |> URI.to_string()
 
         if @publish, do: publish()
@@ -162,7 +163,7 @@ defmodule MyMicropub.Handler do
   def handle_delete(url, access_token) do
     with :ok <- check_auth(access_token, "delete") do
       slug = parse_url(url)
-      file_path = file_path(slug)
+      file_path = post_path(slug)
       post = read_post(file_path)
       post = Map.put(post, "draft", [true])
       {content, metadata} = format_post(post)
@@ -178,7 +179,7 @@ defmodule MyMicropub.Handler do
   def handle_undelete(url, access_token) do
     with :ok <- check_auth(access_token, "undelete") do
       slug = parse_url(url)
-      file_path = file_path(slug)
+      file_path = post_path(slug)
       post = read_post(file_path)
       post = Map.delete(post, "draft")
       {content, metadata} = format_post(post)
@@ -211,7 +212,7 @@ defmodule MyMicropub.Handler do
   def handle_source_query(url, properties, access_token) do
     with :ok <- check_auth(access_token) do
       slug = parse_url(url)
-      file_path = file_path(slug)
+      file_path = post_path(slug)
       post = read_post(file_path)
 
       res =
@@ -354,9 +355,7 @@ defmodule MyMicropub.Handler do
   end
 
   defp create_thumbnail(path, slug, extension, target_width) do
-    dest_path = Path.join([media_path(), slug])
-    File.mkdir_p!(dest_path)
-    dest_path = Path.join([dest_path, "1-#{target_width}.#{extension}"])
+    dest_path = Path.join([post_dir(String.to_integer(slug)), "1-#{target_width}.#{extension}"])
     File.copy!(path, dest_path)
 
     _create_thumbnail(extension, dest_path, target_width)
@@ -506,11 +505,15 @@ defmodule MyMicropub.Handler do
     Map.pop(post, "content")
   end
 
-  defp file_path(slug) do
+  defp post_dir(slug) do
     date = DateTime.from_unix!(slug)
     year = Integer.to_string(date.year)
     month = date.month |> Integer.to_string() |> String.pad_leading(2, "0")
-    Path.join([posts_path(), year, month, "#{slug}.md"])
+    Path.join([posts_path(), year, month, Integer.to_string(slug)])
+  end
+
+  defp post_path(slug) do
+    Path.join(post_dir(slug), "index.md")
   end
 
   defp publish do
@@ -521,7 +524,6 @@ defmodule MyMicropub.Handler do
   defp blog_path, do: Application.get_env(:my_micropub, :blog_path)
   defp posts_path, do: Path.join([Application.get_env(:my_micropub, :blog_path), "/content/post"])
   defp original_image_path, do: Path.join([Application.get_env(:my_micropub, :blog_path), "/original_images"])
-  defp media_path, do: Path.join([Application.get_env(:my_micropub, :blog_path), "/static/post"])
   defp hostname, do: Application.get_env(:my_micropub, :hostname)
   defp micropub_url, do: Application.get_env(:my_micropub, :micropub_url)
   defp media_upload_path, do: Application.get_env(:my_micropub, :media_upload_path)
