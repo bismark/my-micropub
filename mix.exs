@@ -26,7 +26,8 @@ defmodule MyMicropub.MixProject do
       {:jason, "~> 1.1"},
       {:httpoison, "~> 1.2"},
       {:exsync, "~> 0.2.3", only: :dev},
-      {:elixir_uuid, "~> 1.2"}
+      {:elixir_uuid, "~> 1.2"},
+      {:floki, "~> 0.20.3"}
     ]
   end
 end

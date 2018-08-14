@@ -10,6 +10,8 @@ defmodule MyMicropub.Application do
     end
 
     children = [
+      MyMicropub.Webmention.Validator,
+      MyMicropub.Webmention.Store,
       Plug.Adapters.Cowboy2.child_spec(
         scheme: :http,
         plug: MyMicropub.Plug,
