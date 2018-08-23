@@ -29,5 +29,38 @@ defmodule MyMicropub.Utils do
     end
   end
 
+  # Regexes lifted from https://github.com/simonrand/ex_link_header
+  def parse_link_headers(headers) do
+    headers
+    |> Enum.filter(&(String.downcase(elem(&1, 0)) == "link"))
+    |> Enum.map(fn {_, value} ->
+      value
+      |> String.split(~r{,\s*<}, trim: true)
+      |> Enum.map(&Regex.run(~r{<?(.+)>; (.+)}, &1))
+      |> Enum.reject(&match?(nil, &1))
+      |> Enum.filter(fn [_, url, params] ->
+        params
+        |> String.split(";", trim: true)
+        |> Enum.any?(fn param ->
+          [_, name, value] = Regex.run(~r{(\w+)=\"?([\w\s]+)\"?}, param)
+
+          case name do
+            "rel" ->
+              value
+              |> String.split()
+              |> Enum.member?("webmention")
+
+            _ ->
+              false
+          end
+        end)
+      end)
+      |> Enum.map(fn [_, url, _] -> url end)
+      |> List.first()
+    end)
+    |> Enum.reject(&match?(nil, &1))
+    |> List.first()
+  end
+
   defp posts_path, do: Path.join([Application.get_env(:my_micropub, :blog_path), "/content/post"])
 end

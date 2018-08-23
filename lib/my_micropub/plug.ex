@@ -27,8 +27,8 @@ defmodule MyMicropub.Plug do
 
   post "/webmention" do
     case Webmention.handle(conn) do
-      :ok -> send_resp(conn, 202, "")
-      :error -> send_resp(conn, 400, "")
+      :ok -> send_resp(conn, 202, "Accepted")
+      :error -> send_resp(conn, 400, "Bad Request")
     end
   end
 

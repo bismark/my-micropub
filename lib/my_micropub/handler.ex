@@ -2,6 +2,7 @@ defmodule MyMicropub.Handler do
   @behaviour PlugMicropub.HandlerBehaviour
 
   alias MyMicropub.Utils
+  alias MyMicropub.Webmention
 
   @publish false
 
@@ -56,18 +57,19 @@ defmodule MyMicropub.Handler do
         |> handle_title(properties)
         |> handle_bookmark(properties)
         |> handle_tags(properties)
-        |> Jason.encode!(@json_opts)
 
-      File.write!(file_path, [metadata, "\n\n", content])
+      File.write!(file_path, [Jason.encode!(metadata, @json_opts), "\n\n", content])
 
       url =
         hostname()
         |> struct(path: Path.join(["/post", slug]))
         |> URI.to_string()
 
-      if @publish, do: publish()
+      with :ok <- publish() do
+        Webmention.send(metadata, content)
+      end
 
-      {:ok, :created, url}
+      {:ok, :accepted, url}
     end
   end
 
@@ -428,7 +430,7 @@ defmodule MyMicropub.Handler do
   end
 
   defp parse_content([%{"html" => html}]), do: html
-  defp parse_content(content), do: content
+  defp parse_content([content]), do: content
 
   defp check_auth(access_token, required_scope \\ nil) do
     url = "https://tokens.indieauth.com/token"
@@ -509,13 +511,14 @@ defmodule MyMicropub.Handler do
   end
 
   defp publish do
-    System.cmd("git", ["commit", "-a", "-m", "\"micropub post\""], cd: blog_path())
-    System.cmd("git", ["push"], cd: blog_path())
-    System.cmd("hugo", ["--quiet"], cd: blog_path())
-    System.cmd("netlifyctl", ["deploy"], cd: Path.join(blog_path(), "public"))
+    # System.cmd("git", ["commit", "-a", "-m", "\"micropub post\""], cd: blog_path())
+    # System.cmd("git", ["push"], cd: blog_path())
+    # System.cmd("hugo", ["--quiet"], cd: blog_path())
+    # System.cmd("netlifyctl", ["deploy"], cd: Path.join(blog_path(), "public"))
+    :ok
   end
 
-  defp blog_path, do: Application.get_env(:my_micropub, :blog_path)
+  # defp blog_path, do: Application.get_env(:my_micropub, :blog_path)
   defp posts_path, do: Path.join([Application.get_env(:my_micropub, :blog_path), "/content/post"])
 
   defp original_image_path,

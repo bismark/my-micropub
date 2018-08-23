@@ -10,6 +10,7 @@ defmodule MyMicropub.Application do
     end
 
     children = [
+      {Task.Supervisor, name: MyMicropub.Webmention.TaskSupervisor},
       MyMicropub.Webmention.Validator,
       MyMicropub.Webmention.Store,
       Plug.Adapters.Cowboy2.child_spec(
