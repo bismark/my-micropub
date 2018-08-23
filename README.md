@@ -7,3 +7,6 @@ The code is... not good.
 Basically bare minimum to get things working.
 
 Still WIP!
+
+[1]: https://indieweb.org
+[2]: https://iambismark.net
